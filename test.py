@@ -2,7 +2,10 @@ import numpy as np
 import os
 import subprocess
 import sys
+import time
 from multiprocessing import Pool, Queue, Process, Manager, cpu_count
+from scipy.stats import spearmanr as sp, ss
+
 
 
 def pipe(cmd_list):
@@ -61,8 +64,9 @@ cis_coords = '/Volumes/Seabiscuit/Work/Projects/ENCODE/ATAC-summits/all.tissues/
 # NOTE: input coordinates must have name column; if len row == 3,
 # append a name to each row.
 
-# Get the names for each element in coordinates list;
-# Save this dict to be used to retrieve row index later.
+
+'''Get the names for each element in coordinates list;
+Save this dict to be used to retrieve row index later.'''
 
 cis_names = {}
 with open(cis_coords) as cis_coords_bed:
@@ -71,8 +75,8 @@ with open(cis_coords) as cis_coords_bed:
 # print np.array(cis_names)
 
 
-# Intersect coordinates of cis-regulatory elements with
-# interacting region boundaries to constrain interaction space.
+'''Intersect coordinates of cis-regulatory elements with
+interacting region boundaries to constrain interaction space.'''
 
 # If using TAD domains...
 boundary_coords = '/Users/yuanz/Desktop/asdf/total.HindIII.combined.domain'
@@ -88,8 +92,8 @@ intersect_cmd = 'bedtools intersect -wo ' + \
 run_bash(intersect_cmd)
 
 
-# Parse the intersect bed output to build dict of bin/TAD's and
-# the corresponding coordinates that fall within it.
+'''Parse the intersect bed output to build dict of bin/TAD's and
+the corresponding coordinates that fall within it.'''
 
 TAD_loci_dict = {}
 
@@ -116,8 +120,8 @@ print len(TAD_loci_dict)
 # print np.array([cis_names[asdf] for asdf in flattened])
 
 
-# Get the idx of "enhancer" and "promoter" elements relative
-# to the coordinates bed list.
+'''Get the idx of "enhancer" and "promoter" elements relative
+to the coordinates bed list.'''
 
 # If using an input set of indices...
 ###
@@ -125,17 +129,57 @@ print len(TAD_loci_dict)
 # Otherwise, define promoters as elements w/in 1kb of TSS
 ###
 
+# Then, load the window bed output to get names of each se
+enhancer_names = []
+with open('%s/summits.named.TSS.distal.bed' % out_dir) as enhancer_bed:
+    for j, line in enumerate(enhancer_bed):
+        enhancer_names.append(line.rstrip().split('\t')[-1])
+enhancer_idx = [cis_names[enhancer] for enhancer in enhancer_names]
 
-# Load signal array over which to run correlations
+promoter_names = []
+with open('%s/summits.named.TSS.distal.bed' % out_dir) as promoter_bed:
+    for j, line in enumerate(promoter_bed):
+        promoter_names.append(line.rstrip().split('\t')[-1])
+promoter_idx = [cis_names[promoter] for promoter in promoter_names]
+
+
+'''Load signal array over which to run correlations.'''
 # NOTE: In future versions, specify different arrays?
 # NOTE2: Specify P-P, E-P, E-E, or all x all
 # NOTE3: Choose Pearson or Spearman (or other?)
 
 # Here, load signal array for ATAC-seq; get distal elements
-# and proximal elements; correlate elements within same contraint
+# and proximal elements; correlate elements within same bin
 
 ATAC_array = np.genfromtxt('%s/test_array.txt' % out_dir)
 print ATAC_array.shape
+
+
+'''For each bin/TAD, get the slice of input array(s) based on
+corresponding row idx for constituent elements. Correlate the
+elements of interest within the bin.'''
+
+fast_pearson(np.random.random((1000, 66)))
+
+TAD_corr = {}
+
+for TAD in TAD_loci_dict:
+
+    TAD_rows = TAD_loci_dict[TAD]
+    TAD_rows_idx = [cis_names[ele_name] for ele_name in TAD_rows]
+
+    TAD_array = np.array([ATAC_array[meep] for meep in TAD_rows_idx])
+
+    TAD_correlation = fast_pearson(TAD_array)
+    TAD_corr[TAD] = TAD_correlation
+
+
+### NOTE: PLOT AND EXPORT SUMMARY DEBUG STATS/PLOTS HERE.
+
+
+'''For promoter-enhancer predictions only!'''
+
+
 
 
 
