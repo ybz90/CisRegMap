@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import os
 import subprocess
@@ -58,9 +59,9 @@ def fast_pearson(curr_signal):
 
 ###########
 
-out_dir = '/Users/yuanz/Desktop/asdf'
+out_dir = '/Users/yuanz/Desktop/cisregmap'
 
-cis_coords = '/Volumes/Seabiscuit/Work/Projects/ENCODE/ATAC-summits/all.tissues/summits/summits-merged.top.20.named.bed'
+cis_coords = '%s/summits-merged.top.20.named.bed' % out_dir
 
 # NOTE: input coordinates must have name column; if len row == 3,
 # append a name to each row.
@@ -80,7 +81,7 @@ with open(cis_coords) as cis_coords_bed:
 interacting region boundaries to constrain interaction space.'''
 
 # If using TAD domains...
-boundary_coords = '/Users/yuanz/Desktop/asdf/total.HindIII.combined.domain'
+boundary_coords = '%s/mESC/HindIII_combined/total.HindIII.combined.domain' % out_dir
 
 # Otherwise, use arbitrary bins
 bin_size = 500000
@@ -131,23 +132,30 @@ to the coordinates bed list.'''
 ###
 
 # Then, load the window bed output to get names of each se
+
+cis_types = {}
+
 enhancer_names = []
-with open('%s/summits.named.TSS.distal.bed' % out_dir) as enhancer_bed:
+with open('%s/summits-merged.top.20.named.distal.bed' % out_dir) as enhancer_bed:
     for j, line in enumerate(enhancer_bed):
-        enhancer_names.append(line.rstrip().split('\t')[-1])
-enhancer_idx = [cis_names[enhancer] for enhancer in enhancer_names]
+        line = line.rstrip().split('\t')
+        enhancer_names.append(line[-1])
+        cis_types[line[-1]] = 'distal'
 
 promoter_names = []
-with open('%s/summits.named.TSS.proximal.bed' % out_dir) as promoter_bed:
+with open('%s/summits-merged.top.20.named.proximal.bed' % out_dir) as promoter_bed:
     for j, line in enumerate(promoter_bed):
-        promoter_names.append(line.rstrip().split('\t')[-1])
-promoter_idx = [cis_names[promoter] for promoter in promoter_names]
+        line = line.rstrip().split('\t')
+        promoter_names.append(line[-1])
+        cis_types[line[-1]] = 'proximal'
+
+# print pretty(cis_types)
 
 
-'''Load signal array over which to run correlations.'''
-# NOTE: In future versions, specify different arrays?
-# NOTE2: Specify P-P, E-P, E-E, or all x all
-# NOTE3: Choose Pearson or Spearman (or other?)
+'''
+Load signal array over which to run correlations.
+Calculate pairwise correlation for EVERY locus within each TAD.
+'''
 
 # Here, load signal array for ATAC-seq; get distal elements
 # and proximal elements; correlate elements within same bin
@@ -158,101 +166,98 @@ print ATAC_array.shape
 
 '''For each bin/TAD, get the slice of input array(s) based on
 corresponding row idx for constituent elements. Correlate the
-elements of interest within the bin.'''
+elements of interest within the bin.
+
+Then, parse the pairwise correlation matrix for each interaction.
+If the correlation is > threshold, add A->B and B->A to the
+global interaction dict.'''
 
 fast_pearson(np.random.random((1000, 66)))
 
-TAD_corr = {}
+r_cutoff = 0.7
+interaction_pairs = {}
 
 start_time = time.time()
 
+# for TAD in ['chr1:3000000-4360000']:
 for TAD in TAD_loci_dict:
 
     TAD_rows = TAD_loci_dict[TAD]
-    TAD_rows_idx = [cis_names[ele_name] for ele_name in TAD_rows]
 
-    TAD_array = np.array([ATAC_array[meep] for meep in TAD_rows_idx])
+    if len(TAD_rows) > 1:
+        TAD_rows_idx = [cis_names[ele_name] for ele_name in TAD_rows]
 
-    TAD_correlation = fast_pearson(TAD_array)
-    TAD_corr[TAD] = TAD_correlation
+        TAD_array = np.array([ATAC_array[meep] for meep in TAD_rows_idx])
 
+        # Calculate either Pearson or Spearman correlation
+        # (or some alternative distance matrix)
+        TAD_correlation = fast_pearson(TAD_array)
+
+        # For each cell, the idx of curr TAD_array
+        # corersponds to name in TAD_rows
+        for i in range(len(TAD_rows)):
+            for j in range(i+1, len(TAD_rows)):
+                if TAD_correlation[i][j] > r_cutoff:  # add to interaction pairs dict
+                    if TAD_rows[i] not in interaction_pairs:
+                        interaction_pairs[TAD_rows[i]] = []
+                    if TAD_rows[j] not in interaction_pairs:
+                        interaction_pairs[TAD_rows[j]] = []
+                    interaction_pairs[TAD_rows[i]].append(TAD_rows[j])
+                    interaction_pairs[TAD_rows[j]].append(TAD_rows[i])
+
+# print pretty(interaction_pairs)
 print ('--- %s seconds ---' % (time.time() - start_time))
 
 
 # NOTE: PLOT AND EXPORT SUMMARY DEBUG STATS/PLOTS HERE.
 
+'''
+For each interaction type, get the interactions from the global
+interaction_pairs dict:
+* E-P
+* P-E
+* P-P
+* E-E
+'''
 
-'''For promoter-enhancer predictions only!'''
+EP = {}
+PE = {}
+PP = {}
+EE = {}
 
-# NOTE: For future versions, specify what type of interactions to predict (e.g. P-P, E-P, etc.)
-
-# For each bin/TAD, load all of its correlations from TAD_corr.
-# Then, get the appropriate rows for the interactions of interest,
-# taking their idx within the elements in current bin ONLY.
-
-r_cutoff = 0.7
-
-EP_pairs = []
-E_to_P = {}
-P_to_E = {}
-
-for TAD in TAD_corr.keys()[:]:
-
-    TAD_correlation = TAD_corr[TAD]
-
-    TAD_rows = TAD_loci_dict[TAD]
-    TAD_rows_idx = [cis_names[ele_name] for ele_name in TAD_rows]
-
-    distal_TAD_rows = list(set(TAD_rows_idx) & set(enhancer_idx))
-    prox_TAD_rows = list(set(TAD_rows_idx) & set(promoter_idx))
-    prox_TAD_rows_idx = [TAD_rows_idx.index(prox_ele)
-                         for prox_ele in prox_TAD_rows]
-
-    # if there are both enhancers and promoters
-    if len(distal_TAD_rows) > 0 and len(prox_TAD_rows) > 0:
-
-        for dist_ele in distal_TAD_rows:
-
-            # idx relative to this TAD ONLY!
-            dist_ele_idx = TAD_rows_idx.index(dist_ele)
-
-            dist_ele_corr = TAD_correlation[dist_ele_idx]
-
-            good_prox_cols = [
-                prox_ele_idx for prox_ele_idx in prox_TAD_rows_idx if
-                1 > dist_ele_corr[prox_ele_idx] >= r_cutoff
-            ]
-            good_prox = [prox_TAD_rows[
-                prox_TAD_rows_idx.index(prox_ele_idx)
-            ]
-                for prox_ele_idx in good_prox_cols
-            ]
-
-            # ### DEBUG:
-            # if TAD == TAD_idx.keys()[zz]:
-            #     print dist_ele, dist_ele_idx, good_prox_cols, good_prox
-
-            # so save the dist ele, and each prox ele in good_prox
-            for prox_ele in good_prox:
-                EP_pairs.append([dist_ele, prox_ele])
-            # or save as dict yo
-                if dist_ele not in E_to_P:
-                    E_to_P[dist_ele] = []
-                E_to_P[dist_ele].append(prox_ele)
-                if prox_ele not in P_to_E:
-                    P_to_E[prox_ele] = []
-                P_to_E[prox_ele].append(dist_ele)
-
-# # DEBUG
-# print TAD, '\n', np.array(TAD_rows_idx)
-# print len(TAD_rows_idx), len(distal_TAD_rows), len(prox_TAD_rows)
-# print distal_TAD_rows, prox_TAD_rows, prox_TAD_rows_idx
-
+for node in interaction_pairs:
+    # Get the element type for each cis-element with predicted pairings
+    node_type = cis_types[node]
+    # Get the element type for each of its interacting targets
+    node_targets = interaction_pairs[node]
+    # Add the node, and its target interactions, to the appropriate dicts
+    if node_type == 'distal':
+        for target in node_targets:
+            if cis_types[target] == 'distal':
+                if node not in EE:
+                    EE[node] = []
+                EE[node].append(target)
+            else:
+                if node not in EP:
+                    EP[node] = []
+                EP[node].append(target)
+    else:
+        for target in node_targets:
+            if cis_types[target] == 'distal':
+                if node not in PE:
+                    PE[node] = []
+                PE[node].append(target)
+            else:
+                if node not in PP:
+                    PP[node] = []
+                PP[node].append(target)
 
 #
-print 'total pairs: ', len(EP_pairs)
-print 'num enhancers: ', len(E_to_P), len(E_to_P) / float(len(enhancer_idx))
-print 'num promoters: ', len(P_to_E), len(P_to_E) / float(len(promoter_idx))
+print 'total interaction pairs: ', np.sum([len(interaction_pairs[node]) for node in interaction_pairs])
+print 'num E-P: ', len(EP), len(EP) / float(len(enhancer_names)), np.sum([len(EP[node]) for node in EP])
+print 'num P-E: ', len(PE), len(PE) / float(len(promoter_names)), np.sum([len(PE[node]) for node in PE])
+print 'num P-P: ', len(PP), len(PP) / float(len(promoter_names)), np.sum([len(PP[node]) for node in PP])
+print 'num E-E: ', len(EE), len(EE) / float(len(enhancer_names)), np.sum([len(EE[node]) for node in EE])
 
 
 # NOTE: Export interaction allxall dict; desired interactions; plot a contact matrix like HiC.
